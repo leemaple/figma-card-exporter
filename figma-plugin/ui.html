@@ -1,0 +1,317 @@
+<html>
+<head>
+  <style>
+    body {
+      font: 12px sans-serif;
+      margin: 20px;
+      max-width: 450px;
+    }
+    #fileInput {
+      margin-bottom: 10px;
+      width: 100%;
+    }
+    button {
+      border-radius: 5px;
+      background: #18A0FB;
+      color: white;
+      border: none;
+      padding: 8px 15px;
+      margin: 0 5px;
+      cursor: pointer;
+      width: 100%;
+    }
+    button:disabled {
+      background: #ccc;
+    }
+    .status {
+      margin-top: 10px;
+      padding: 8px;
+      border-radius: 3px;
+      white-space: pre-wrap;
+      font-family: monospace;
+      max-height: 200px;
+      overflow-y: auto;
+    }
+    .error {
+      background: #ffd1d1;
+      color: #d32f2f;
+    }
+    .success {
+      background: #c8e6c9;
+      color: #388e3c;
+    }
+    .debug {
+      background: #e3f2fd;
+      color: #1976d2;
+      font-size: 11px;
+    }
+    .file-info {
+      margin: 10px 0;
+      padding: 10px;
+      background: #f5f5f5;
+      border-radius: 3px;
+      border-left: 3px solid #18A0FB;
+    }
+    .file-info h3 {
+      margin-top: 0;
+      margin-bottom: 5px;
+      font-size: 14px;
+    }
+    .file-info p {
+      margin: 5px 0;
+    }
+    label {
+      display: block;
+      margin-bottom: 5px;
+      font-weight: bold;
+    }
+    .desktop-app-status {
+      margin-top: 15px;
+      padding: 8px;
+      border-radius: 3px;
+      display: flex;
+      align-items: center;
+    }
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      margin-right: 8px;
+    }
+    .status-checking {
+      background-color: #FFC107;
+    }
+    .status-connected {
+      background-color: #4CAF50;
+    }
+    .status-disconnected {
+      background-color: #F44336;
+    }
+  </style>
+</head>
+<body>
+  <h2>文本卡片生成器</h2>
+  
+  <div class="desktop-app-status">
+    <div class="status-dot status-checking" id="desktop-app-status-dot"></div>
+    <div id="desktop-app-status-text">正在检查桌面应用连接...</div>
+  </div>
+  
+  <label>选择txt文件：</label>
+  <input type="file" id="fileInput" accept=".txt">
+  
+  <div id="fileInfo" class="file-info" style="display: none;">
+    <h3>文件信息</h3>
+    <p id="fileName">文件名: </p>
+    <p id="channelName">频道: </p>
+    <p id="textPreview">文本预览: </p>
+    <p id="exportPath">输出路径: </p>
+  </div>
+  
+  <button id="updateButton" disabled>更新文本并导出</button>
+  <div id="status"></div>
+
+  <script>
+    let selectedText = '';
+    let selectedFilePath = '';
+    let fileName = '';
+    let channelName = '';
+    let desktopAppConnected = false;
+    const DESKTOP_APP_URL = 'http://localhost:54545';
+    
+    // 检查桌面应用状态
+    async function checkDesktopAppStatus() {
+      const statusDot = document.getElementById('desktop-app-status-dot');
+      const statusText = document.getElementById('desktop-app-status-text');
+      
+      statusDot.className = 'status-dot status-checking';
+      statusText.textContent = '正在检查桌面应用连接...';
+      
+      try {
+        console.log('正在检查桌面应用状态...');
+        addStatus('debug', `尝试连接: ${DESKTOP_APP_URL}/status`);
+        
+        const response = await fetch(`${DESKTOP_APP_URL}/status`, { 
+          method: 'GET',
+          headers: { 'Content-Type': 'application/json' },
+          mode: 'cors'
+        });
+        
+        console.log('收到响应:', response);
+        addStatus('debug', `状态检查响应: ${response.status} ${response.statusText}`);
+        
+        if (response.ok) {
+          const data = await response.json();
+          console.log('响应数据:', data);
+          addStatus('debug', `响应数据: ${JSON.stringify(data)}`);
+          
+          if (data.status === 'running') {
+            statusDot.className = 'status-dot status-connected';
+            statusText.textContent = '桌面应用已连接 - 图片将直接保存到目标位置';
+            desktopAppConnected = true;
+            addStatus('success', '成功连接到桌面应用');
+          } else {
+            statusDot.className = 'status-dot status-disconnected';
+            statusText.textContent = '桌面应用状态异常 - 将使用浏览器下载';
+            desktopAppConnected = false;
+            addStatus('error', `桌面应用状态异常: ${data.status}`);
+          }
+        } else {
+          throw new Error(`响应不正确: ${response.status} ${response.statusText}`);
+        }
+      } catch (error) {
+        console.error('连接错误:', error);
+        addStatus('error', `连接错误: ${error.message}`);
+        statusDot.className = 'status-dot status-disconnected';
+        statusText.textContent = '桌面应用未连接 - 将使用浏览器下载';
+        desktopAppConnected = false;
+      }
+    }
+    
+    // 初始检查
+    checkDesktopAppStatus();
+    
+    // 定期检查连接状态
+    setInterval(checkDesktopAppStatus, 10000);
+    
+    // 发送到桌面应用
+    async function sendToDesktopApp(exportData) {
+      if (!desktopAppConnected) {
+        return false;
+      }
+      
+      try {
+        const response = await fetch(`${DESKTOP_APP_URL}/save-image`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(exportData)
+        });
+        
+        if (response.ok) {
+          const data = await response.json();
+          if (data.success) {
+            addStatus('success', `桌面应用已保存图片到: ${data.path}`);
+            return true;
+          } else {
+            addStatus('error', `桌面应用保存失败: ${data.message}`);
+            return false;
+          }
+        } else {
+          throw new Error('保存请求失败');
+        }
+      } catch (error) {
+        addStatus('error', `连接桌面应用失败: ${error.message}`);
+        return false;
+      }
+    }
+    
+    // 浏览器下载
+    function downloadInBrowser(exportData) {
+      // 构建有意义的文件名 (包含频道名)
+      const outputFileName = `${exportData.channelName}_${exportData.fileName.replace('.txt', '.png')}`;
+      
+      // 创建下载链接
+      const link = document.createElement('a');
+      link.href = exportData.imageData;
+      link.download = outputFileName;
+      
+      // 添加到文档并触发点击
+      document.body.appendChild(link);
+      link.click();
+      
+      // 清理
+      document.body.removeChild(link);
+      
+      addStatus('success', `图片已下载: ${outputFileName}`);
+    }
+    
+    document.getElementById('fileInput').onchange = function(event) {
+      const file = event.target.files[0];
+      if (file) {
+        const reader = new FileReader();
+        reader.onload = function(e) {
+          const text = e.target.result;
+          selectedText = text.split('\n')[0].trim();
+          
+          // 获取文件名
+          fileName = file.name;
+          
+          // 从文件路径中提取频道名
+          // 假设文件路径格式为: /transcripts/channelName/filename.txt
+          channelName = 'xxxack'; // 默认频道名，通常应该从文件路径中提取
+          
+          // 构建完整路径
+          const basePath = "F:\\LiFeng\\Project\\windsurf\\ShortsMaster_RedditStory\\data";
+          selectedFilePath = `${basePath}\\transcripts\\${channelName}\\${fileName}`;
+          
+          // 构建导出路径
+          const exportPath = `${basePath}\\exports\\${channelName}\\${fileName.replace('.txt', '.png')}`;
+          
+          // 更新UI
+          document.getElementById('fileName').textContent = `文件名: ${fileName}`;
+          document.getElementById('channelName').textContent = `频道: ${channelName}`;
+          document.getElementById('textPreview').textContent = `文本预览: ${selectedText}`;
+          document.getElementById('exportPath').textContent = `输出路径: ${exportPath}`;
+          document.getElementById('fileInfo').style.display = 'block';
+          
+          // 启用按钮
+          document.getElementById('updateButton').disabled = false;
+        };
+        reader.readAsText(file);
+      }
+    };
+
+    document.getElementById('updateButton').onclick = function() {
+      if (selectedText && selectedFilePath) {
+        parent.postMessage({ 
+          pluginMessage: { 
+            type: 'update-text',
+            text: selectedText,
+            filePath: selectedFilePath,
+            fileName: fileName,
+            channelName: channelName
+          }
+        }, '*');
+      }
+    };
+    
+    // 添加状态消息
+    function addStatus(type, message) {
+      const statusDiv = document.getElementById('status');
+      
+      // 创建新的状态消息
+      const newStatus = document.createElement('div');
+      newStatus.className = `status ${type}`;
+      newStatus.textContent = message;
+      
+      // 将新消息添加到顶部
+      statusDiv.insertBefore(newStatus, statusDiv.firstChild);
+      
+      // 如果状态消息太多，删除旧的
+      while (statusDiv.children.length > 5) {
+        statusDiv.removeChild(statusDiv.lastChild);
+      }
+    }
+
+    onmessage = (event) => {
+      const msg = event.data.pluginMessage;
+      
+      // 处理普通状态消息
+      if (msg.type === 'success' || msg.type === 'error' || msg.type === 'debug') {
+        addStatus(msg.type, msg.message);
+      }
+      
+      // 处理保存到桌面应用的请求
+      if (msg.type === 'save-to-desktop-app' && msg.exportData) {
+        // 先尝试发送到桌面应用
+        sendToDesktopApp(msg.exportData).then(success => {
+          // 如果桌面应用保存失败，使用浏览器下载作为后备
+          if (!success) {
+            downloadInBrowser(msg.exportData);
+          }
+        });
+      }
+    };
+  </script>
+</body>
+</html>

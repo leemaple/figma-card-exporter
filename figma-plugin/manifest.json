@@ -1,0 +1,12 @@
+{
+  "name": "Text Capitalizer",
+  "id": "text-capitalizer-plugin",
+  "api": "1.0.0",
+  "main": "code.js",
+  "ui": "ui.html",
+  "editorType": ["figma"],
+  "networkAccess": {
+    "allowedDomains": ["*"],
+    "reasoning": "Plugin needs to access local desktop app for direct file saving"
+  }
+}
