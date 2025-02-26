@@ -86,6 +86,75 @@ const server = http.createServer((req, res) => {
         }));
       }
     });
+  } else if (req.method === 'POST' && req.url === '/save-batch') {
+    console.log('处理批量保存请求');
+    let body = '';
+    req.on('data', chunk => { 
+      body += chunk;
+      console.log(`接收数据块: ${chunk.length} 字节`);
+    });
+    
+    req.on('end', () => {
+      console.log('请求数据接收完成');
+      try {
+        const data = JSON.parse(body);
+        console.log(`解析JSON成功: ${Object.keys(data).join(', ')}`);
+        
+        const { images } = data;
+        
+        if (!images || !Array.isArray(images) || images.length === 0) {
+          console.error('缺少必要参数或格式不正确');
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: '缺少必要参数或格式不正确' }));
+          return;
+        }
+        
+        const results = [];
+        const errors = [];
+        
+        // 处理每个图像
+        for (const item of images) {
+          try {
+            const { imageData, filePath } = item;
+            
+            if (!imageData || !filePath) {
+              errors.push({ filePath: filePath || 'unknown', error: '缺少必要参数' });
+              continue;
+            }
+            
+            // 从Base64数据中提取图像数据
+            const base64Data = imageData.replace(/^data:image\/png;base64,/, '');
+            
+            // 确保目标目录存在
+            const dirPath = path.dirname(filePath);
+            if (!fs.existsSync(dirPath)) {
+              fs.mkdirSync(dirPath, { recursive: true });
+            }
+            
+            // 写入文件
+            fs.writeFileSync(filePath, base64Data, 'base64');
+            
+            console.log(`图片已保存到: ${filePath}`);
+            results.push({ filePath, success: true });
+          } catch (error) {
+            console.error(`保存图片 ${item.filePath} 时出错:`, error);
+            errors.push({ filePath: item.filePath, error: error.message });
+          }
+        }
+        
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ 
+          success: true, 
+          message: `批量处理完成。成功: ${results.length}, 失败: ${errors.length}`,
+          results,
+          errors
+        }));
+      } catch (error) {
+        console.error('批量保存图片时出错:', error);
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: `批量保存图片时出错: ${error.message}` }));
+      }
+    });
   } else if (req.method !== 'GET' || req.url !== '/status') {
     console.log(`未处理的请求: ${req.method} ${req.url}`);
     res.writeHead(404);

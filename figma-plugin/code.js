@@ -42,8 +42,19 @@ function getExportPath(inputPath, channelName, fileName) {
 
 // 主要处理逻辑
 figma.ui.onmessage = async (msg) => {
-  if (msg.type === 'update-text') {
+  if (msg.type === 'process-file') {
     try {
+      // 获取当前处理的文件信息
+      const { fileName, text, channelName, currentIndex, totalFiles } = msg;
+      
+      // 发送进度消息
+      figma.ui.postMessage({ 
+        type: 'progress', 
+        message: `处理文件 ${currentIndex + 1}/${totalFiles}: ${fileName}`,
+        current: currentIndex + 1,
+        total: totalFiles
+      });
+      
       // 在当前页面中找到template实例
       const template = findNode(figma.currentPage, node => 
         node.name.toLowerCase() === 'template' && 
@@ -52,57 +63,72 @@ figma.ui.onmessage = async (msg) => {
       if (!template) {
         figma.ui.postMessage({ 
           type: 'error', 
-          message: 'Template not found. Please make sure you have a template node in your current page.' 
+          message: 'Template not found. Please make sure you have a template node in your current page.',
+          currentIndex: currentIndex
         });
         return;
       }
 
-      // 找到card frame
-      const card = findNode(template, node => 
-        node.name.toLowerCase() === 'card' && 
-        (node.type === 'FRAME' || node.type === 'COMPONENT'));
+      // 找到card节点
+      const cardNode = findNode(template, node => 
+        node.type === 'FRAME' && 
+        (node.name.toLowerCase().includes('card') || 
+         node.name.toLowerCase().includes('post')));
       
-      if (!card) {
+      if (!cardNode) {
         figma.ui.postMessage({ 
           type: 'error', 
-          message: 'Card not found in template. Please check the structure.' 
+          message: 'Card node not found in template. Please check the structure.',
+          currentIndex: currentIndex
         });
         return;
       }
-
-      // 找到row中的文本节点
-      const textNode = findNode(card, node => 
-        node.type === 'TEXT' && 
-        node.parent && 
-        node.parent.name.toLowerCase() === 'row');
+      
+      // 找到row节点
+      const rowNode = findNode(cardNode, node => 
+        node.name.toLowerCase().includes('row'));
+      
+      if (!rowNode) {
+        figma.ui.postMessage({ 
+          type: 'error', 
+          message: 'Row node not found in card. Please check the structure.',
+          currentIndex: currentIndex
+        });
+        return;
+      }
+      
+      // 在row节点下找到文本节点
+      const textNode = findNode(rowNode, node => node.type === 'TEXT');
       
       if (!textNode) {
         figma.ui.postMessage({ 
           type: 'error', 
-          message: 'Text node not found in row. Please check the structure.' 
+          message: 'Text node not found under row. Please check the structure.',
+          currentIndex: currentIndex
         });
         return;
       }
-
+      
       // 加载字体
       await figma.loadFontAsync(textNode.fontName);
-
+      
       // 更新文本内容
-      const capitalizedText = capitalizeFirstLetter(msg.text);
+      const capitalizedText = capitalizeFirstLetter(text);
       textNode.characters = capitalizedText;
-
+      
       // 获取导出路径
-      const exportPath = getExportPath(msg.filePath, msg.channelName, msg.fileName);
-
+      const baseExportsPath = "F:\\LiFeng\\Project\\windsurf\\ShortsMaster_RedditStory\\data\\exports";
+      const exportPath = `${baseExportsPath}\\${channelName}\\${fileName.replace('.txt', '.png')}`;
+      
       // 设置导出设置
       const settings = {
         format: 'PNG',
         constraint: { type: 'SCALE', value: 2 }
       };
-
-      // 导出
-      const bytes = await card.exportAsync(settings);
-
+      
+      // 导出整个卡片
+      const bytes = await cardNode.exportAsync(settings);
+      
       // 将bytes转换为base64字符串
       const base64Image = figma.base64Encode(bytes);
       
@@ -112,20 +138,33 @@ figma.ui.onmessage = async (msg) => {
         exportData: {
           imageData: `data:image/png;base64,${base64Image}`,
           filePath: exportPath,
-          fileName: msg.fileName,
-          channelName: msg.channelName
-        }
+          fileName: fileName,
+          channelName: channelName
+        },
+        currentIndex: currentIndex
       });
       
-      // 同时发送成功消息
+      // 发送处理完成消息
       figma.ui.postMessage({ 
-        type: 'success', 
-        message: `文本更新成功！\n原文本: ${msg.text}\n更新后: ${capitalizedText}\n导出路径: ${exportPath}`
+        type: 'process-file-complete', 
+        currentIndex: currentIndex,
+        message: `文件 ${fileName} 处理完成`
       });
       
     } catch (error) {
       console.error('错误:', error);
-      figma.ui.postMessage({ type: 'error', message: `发生错误: ${error.message}` });
+      figma.ui.postMessage({ 
+        type: 'error', 
+        message: `处理文件时出错: ${error.message}`,
+        currentIndex: msg.currentIndex
+      });
+      
+      // 即使出错也继续处理下一个文件
+      figma.ui.postMessage({ 
+        type: 'process-file-complete', 
+        currentIndex: msg.currentIndex,
+        message: `文件处理出错，继续下一个`
+      });
     }
   }
 };

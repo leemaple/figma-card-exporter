@@ -60,6 +60,36 @@
     .file-info p {
       margin: 5px 0;
     }
+    .batch-info {
+      margin: 10px 0;
+      padding: 10px;
+      background: #f5f5f5;
+      border-radius: 3px;
+      border-left: 3px solid #18A0FB;
+    }
+    .batch-info h3 {
+      margin-top: 0;
+      margin-bottom: 5px;
+      font-size: 14px;
+    }
+    .batch-info p {
+      margin: 5px 0;
+    }
+    .file-list {
+      margin-top: 10px;
+    }
+    .file-list ul {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+    }
+    .file-list li {
+      padding: 5px;
+      border-bottom: 1px solid #ccc;
+    }
+    .file-list li:last-child {
+      border-bottom: none;
+    }
     label {
       display: block;
       margin-bottom: 5px;
@@ -97,24 +127,25 @@
     <div id="desktop-app-status-text">正在检查桌面应用连接...</div>
   </div>
   
-  <label>选择txt文件：</label>
-  <input type="file" id="fileInput" accept=".txt">
+  <label>选择txt文件（可多选）：</label>
+  <input type="file" id="fileInput" accept=".txt" multiple>
   
-  <div id="fileInfo" class="file-info" style="display: none;">
-    <h3>文件信息</h3>
-    <p id="fileName">文件名: </p>
+  <div id="batchInfo" class="batch-info" style="display: none;">
+    <h3>批量处理信息</h3>
+    <p id="fileCount">已选择文件数: 0</p>
     <p id="channelName">频道: </p>
-    <p id="textPreview">文本预览: </p>
-    <p id="exportPath">输出路径: </p>
+    <div id="fileList" class="file-list">
+      <ul id="fileListUl"></ul>
+    </div>
   </div>
   
-  <button id="updateButton" disabled>更新文本并导出</button>
+  <button id="updateButton" disabled>批量更新并导出</button>
   <div id="status"></div>
 
   <script>
-    let selectedText = '';
-    let selectedFilePath = '';
-    let fileName = '';
+    let selectedFiles = [];
+    let fileNames = [];
+    let fileTexts = [];
     let channelName = '';
     let desktopAppConnected = false;
     const DESKTOP_APP_URL = 'http://localhost:54545';
@@ -177,30 +208,77 @@
     // 发送到桌面应用
     async function sendToDesktopApp(exportData) {
       if (!desktopAppConnected) {
+        addStatus('error', '桌面应用未连接，无法保存图片');
         return false;
       }
       
       try {
         const response = await fetch(`${DESKTOP_APP_URL}/save-image`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+          },
           body: JSON.stringify(exportData)
         });
         
-        if (response.ok) {
-          const data = await response.json();
-          if (data.success) {
-            addStatus('success', `桌面应用已保存图片到: ${data.path}`);
-            return true;
-          } else {
-            addStatus('error', `桌面应用保存失败: ${data.message}`);
-            return false;
-          }
+        const result = await response.json();
+        
+        if (result.success) {
+          addStatus('success', result.message);
+          return true;
         } else {
-          throw new Error('保存请求失败');
+          addStatus('error', result.error || '保存失败');
+          return false;
         }
       } catch (error) {
-        addStatus('error', `连接桌面应用失败: ${error.message}`);
+        addStatus('error', `连接桌面应用出错: ${error.message}`);
+        return false;
+      }
+    }
+    
+    // 批量发送到桌面应用
+    async function sendBatchToDesktopApp(exportDataArray) {
+      if (!desktopAppConnected) {
+        addStatus('error', '桌面应用未连接，无法保存图片');
+        return false;
+      }
+      
+      try {
+        addStatus('debug', `开始批量发送 ${exportDataArray.length} 个图片到桌面应用...`);
+        
+        const response = await fetch(`${DESKTOP_APP_URL}/save-batch`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ images: exportDataArray })
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+          addStatus('success', result.message);
+          
+          // 显示详细结果
+          if (result.results && result.results.length > 0) {
+            addStatus('success', `成功保存 ${result.results.length} 个文件`);
+          }
+          
+          if (result.errors && result.errors.length > 0) {
+            let errorMsg = `${result.errors.length} 个文件保存失败:\n`;
+            result.errors.forEach(err => {
+              errorMsg += `- ${err.filePath}: ${err.error}\n`;
+            });
+            addStatus('error', errorMsg);
+          }
+          
+          return true;
+        } else {
+          addStatus('error', result.error || '批量保存失败');
+          return false;
+        }
+      } catch (error) {
+        addStatus('error', `连接桌面应用出错: ${error.message}`);
         return false;
       }
     }
@@ -226,54 +304,99 @@
     }
     
     document.getElementById('fileInput').onchange = function(event) {
-      const file = event.target.files[0];
-      if (file) {
+      const files = event.target.files;
+      selectedFiles = [];
+      fileNames = [];
+      fileTexts = [];
+      
+      if (files.length === 0) {
+        document.getElementById('batchInfo').style.display = 'none';
+        document.getElementById('updateButton').disabled = true;
+        return;
+      }
+      
+      // 从文件路径中提取频道名
+      channelName = 'xxxack'; // 默认频道名
+      
+      let filesProcessed = 0;
+      document.getElementById('fileCount').textContent = `已选择文件数: ${files.length}`;
+      document.getElementById('channelName').textContent = `频道: ${channelName}`;
+      document.getElementById('batchInfo').style.display = 'block';
+      
+      const fileListUl = document.getElementById('fileListUl');
+      fileListUl.innerHTML = '';
+      
+      // 逐个处理文件
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
         const reader = new FileReader();
+        
         reader.onload = function(e) {
-          const text = e.target.result;
-          selectedText = text.split('\n')[0].trim();
+          const content = e.target.result;
+          const firstLine = content.split('\n')[0].trim();
           
-          // 获取文件名
-          fileName = file.name;
+          selectedFiles.push(file);
+          fileNames.push(file.name);
+          fileTexts.push(firstLine);
           
-          // 从文件路径中提取频道名
-          // 假设文件路径格式为: /transcripts/channelName/filename.txt
-          channelName = 'xxxack'; // 默认频道名，通常应该从文件路径中提取
+          const li = document.createElement('li');
+          li.textContent = `${file.name} - 首行: ${firstLine.substring(0, 30)}${firstLine.length > 30 ? '...' : ''}`;
+          fileListUl.appendChild(li);
           
-          // 构建完整路径
-          const basePath = "F:\\LiFeng\\Project\\windsurf\\ShortsMaster_RedditStory\\data";
-          selectedFilePath = `${basePath}\\transcripts\\${channelName}\\${fileName}`;
+          filesProcessed++;
           
-          // 构建导出路径
-          const exportPath = `${basePath}\\exports\\${channelName}\\${fileName.replace('.txt', '.png')}`;
-          
-          // 更新UI
-          document.getElementById('fileName').textContent = `文件名: ${fileName}`;
-          document.getElementById('channelName').textContent = `频道: ${channelName}`;
-          document.getElementById('textPreview').textContent = `文本预览: ${selectedText}`;
-          document.getElementById('exportPath').textContent = `输出路径: ${exportPath}`;
-          document.getElementById('fileInfo').style.display = 'block';
-          
-          // 启用按钮
-          document.getElementById('updateButton').disabled = false;
+          // 当所有文件都处理完毕时启用按钮
+          if (filesProcessed === files.length) {
+            document.getElementById('updateButton').disabled = false;
+          }
         };
+        
+        reader.onerror = function() {
+          addStatus('error', `读取文件 ${file.name} 失败`);
+          
+          filesProcessed++;
+          // 当所有文件都处理完毕时启用按钮
+          if (filesProcessed === files.length) {
+            document.getElementById('updateButton').disabled = false;
+          }
+        };
+        
         reader.readAsText(file);
       }
     };
 
     document.getElementById('updateButton').onclick = function() {
-      if (selectedText && selectedFilePath) {
-        parent.postMessage({ 
-          pluginMessage: { 
-            type: 'update-text',
-            text: selectedText,
-            filePath: selectedFilePath,
-            fileName: fileName,
-            channelName: channelName
-          }
-        }, '*');
+      if (selectedFiles.length > 0) {
+        // 禁用按钮防止重复点击
+        document.getElementById('updateButton').disabled = true;
+        addStatus('debug', '开始批量处理...');
+        
+        // 一次只发送一个文件的信息，避免消息过大
+        processNextFile(0);
       }
     };
+    
+    // 递归处理文件
+    function processNextFile(index) {
+      if (index >= selectedFiles.length) {
+        // 所有文件处理完毕
+        addStatus('success', `批量处理完成！共处理 ${selectedFiles.length} 个文件`);
+        document.getElementById('updateButton').disabled = false;
+        return;
+      }
+      
+      // 发送当前文件信息
+      parent.postMessage({ 
+        pluginMessage: { 
+          type: 'process-file',
+          fileName: fileNames[index],
+          text: fileTexts[index],
+          channelName: channelName,
+          currentIndex: index,
+          totalFiles: selectedFiles.length
+        }
+      }, '*');
+    }
     
     // 添加状态消息
     function addStatus(type, message) {
@@ -293,23 +416,68 @@
       }
     }
 
-    onmessage = (event) => {
+    window.onmessage = function(event) {
       const msg = event.data.pluginMessage;
+      if (!msg) return;
       
-      // 处理普通状态消息
-      if (msg.type === 'success' || msg.type === 'error' || msg.type === 'debug') {
-        addStatus(msg.type, msg.message);
+      if (msg.type === 'error') {
+        addStatus('error', msg.message);
+      } 
+      else if (msg.type === 'success') {
+        addStatus('success', msg.message);
       }
-      
-      // 处理保存到桌面应用的请求
-      if (msg.type === 'save-to-desktop-app' && msg.exportData) {
-        // 先尝试发送到桌面应用
-        sendToDesktopApp(msg.exportData).then(success => {
-          // 如果桌面应用保存失败，使用浏览器下载作为后备
+      else if (msg.type === 'progress') {
+        // 更新进度条
+        addStatus('debug', msg.message);
+      }
+      else if (msg.type === 'batch-complete') {
+        // 显示批量处理结果
+        addStatus('success', msg.message);
+        
+        // 显示详细结果
+        if (msg.results.length > 0) {
+          let successDetails = "成功处理的文件：\n";
+          msg.results.forEach((result, index) => {
+            successDetails += `${index+1}. ${result.fileName} - 已保存到 ${result.exportPath}\n`;
+          });
+          addStatus('success', successDetails);
+        }
+        
+        if (msg.errors.length > 0) {
+          let errorDetails = "处理失败的文件：\n";
+          msg.errors.forEach((error, index) => {
+            errorDetails += `${index+1}. ${error.fileName} - 错误: ${error.error}\n`;
+          });
+          addStatus('error', errorDetails);
+        }
+      }
+      else if (msg.type === 'save-to-desktop-app') {
+        const exportData = msg.exportData;
+        
+        // 尝试发送到桌面应用
+        sendToDesktopApp(exportData).then(success => {
           if (!success) {
-            downloadInBrowser(msg.exportData);
+            // 如果桌面应用保存失败，则回退到浏览器下载
+            downloadInBrowser(exportData);
           }
         });
+      }
+      else if (msg.type === 'save-batch-to-desktop-app') {
+        const exportDataArray = msg.exportDataArray;
+        
+        // 尝试批量发送到桌面应用
+        sendBatchToDesktopApp(exportDataArray).then(success => {
+          if (!success) {
+            // 如果桌面应用批量保存失败，则回退到浏览器下载
+            exportDataArray.forEach(data => {
+              downloadInBrowser(data);
+            });
+          }
+        });
+      }
+      else if (msg.type === 'process-file-complete') {
+        // 处理完成后继续处理下一个文件
+        processNextFile(msg.currentIndex + 1);
       }
     };
   </script>
